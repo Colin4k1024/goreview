@@ -7,7 +7,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const version = "0.2.0"
+var version = "0.2.0"
 
 var rootCmd = &cobra.Command{
 	Use:   "goreview",
@@ -76,6 +76,7 @@ rules:
     - SENSITIVE_LOG
     - CONTEXT_LEAK
     - JWT_ERROR
+    - HARDCODED_SECRET
   performance:
     - GOROUTINE_LEAK
     - RESOURCE_LEAK

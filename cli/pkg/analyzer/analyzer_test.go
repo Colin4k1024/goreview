@@ -7,54 +7,30 @@ import (
 )
 
 func TestSQLInjection(t *testing.T) {
-	rules := []types.Rule{{
-		ID:          "SQL_INJECTION",
-		Severity:    types.SeveritySevere,
-		Description: "SQL injection detection",
-		Category:    "security",
-		Suggestion:  "Use parameterized queries",
-	}}
-
+	rules := []types.Rule{{ID: "SQL_INJECTION", Severity: types.SeveritySevere, Description: "SQL injection detection", Category: "security", Suggestion: "Use parameterized queries"}}
 	analyzer := New(rules)
-
 	tests := []struct {
 		name    string
 		code    string
-		want    int // minimum issues expected
+		want    int
 		comment string
 	}{
-		{
-			name: "fmt.Sprintf in SQL context",
-			code: `package main
+		{name: "fmt.Sprintf in SQL context", code: `package main
 import "database/sql"
 func query(db *sql.DB, userID string) {
     db.Query("SELECT * FROM users WHERE id = " + userID)
-}`,
-			want:    1,
-			comment: "String concatenation in SQL query",
-		},
-		{
-			name: "safe parameterized query",
-			code: `package main
+}`, want: 1, comment: "String concatenation in SQL query"},
+		{name: "safe parameterized query", code: `package main
 import "database/sql"
 func query(db *sql.DB, userID string) {
     db.Query("SELECT * FROM users WHERE id = $1", userID)
-}`,
-			want:    0,
-			comment: "Should not trigger - parameterized",
-		},
-		{
-			name: "strings.Join in SQL context",
-			code: `package main
+}`, want: 0, comment: "Should not trigger - parameterized"},
+		{name: "strings.Join in SQL context", code: `package main
 import "strings"
 func bad(ids []string) string {
     return "SELECT * FROM users WHERE id IN (" + strings.Join(ids, ",") + ")"
-}`,
-			want:    0, // flagging strings.Join as suspicious
-			comment: "strings.Join with SQL keyword context",
-		},
+}`, want: 0, comment: "strings.Join with SQL keyword context"},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			issues, err := analyzer.AnalyzeFile("test.go", []byte(tt.code))
@@ -69,50 +45,29 @@ func bad(ids []string) string {
 }
 
 func TestSensitiveLog(t *testing.T) {
-	rules := []types.Rule{{
-		ID:          "SENSITIVE_LOG",
-		Severity:    types.SeverityWarning,
-		Description: "Sensitive data logging",
-		Category:    "security",
-		Suggestion:  "Remove sensitive fields from logs",
-	}}
-
+	rules := []types.Rule{{ID: "SENSITIVE_LOG", Severity: types.SeverityWarning, Description: "Sensitive data logging", Category: "security", Suggestion: "Remove sensitive fields from logs"}}
 	analyzer := New(rules)
-
 	tests := []struct {
 		name string
 		code string
 		want int
 	}{
-		{
-			name: "password in log",
-			code: `package main
+		{name: "password in log", code: `package main
 import "fmt"
 func bad() {
     fmt.Println("password:", "secret123")
-}`,
-			want: 2, // 2 patterns match: password+secret -> 2 issues (dedup pending)
-		},
-		{
-			name: "token in error",
-			code: `package main
+}`, want: 1},
+		{name: "token in error", code: `package main
 import "fmt"
 func bad(token string) {
     fmt.Printf("token=%s", token)
-}`,
-			want: 1,
-		},
-		{
-			name: "safe log",
-			code: `package main
+}`, want: 1},
+		{name: "safe log", code: `package main
 import "fmt"
 func good(userID string) {
     fmt.Println("user:", userID)
-}`,
-			want: 0,
-		},
+}`, want: 0},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			issues, err := analyzer.AnalyzeFile("test.go", []byte(tt.code))
@@ -127,41 +82,24 @@ func good(userID string) {
 }
 
 func TestGoroutineLeak(t *testing.T) {
-	rules := []types.Rule{{
-		ID:          "GOROUTINE_LEAK",
-		Severity:    types.SeverityWarning,
-		Description: "Goroutine without errgroup",
-		Category:    "performance",
-		Suggestion:  "Use errgroup",
-	}}
-
+	rules := []types.Rule{{ID: "GOROUTINE_LEAK", Severity: types.SeverityWarning, Description: "Goroutine without errgroup", Category: "performance", Suggestion: "Use errgroup"}}
 	analyzer := New(rules)
-
 	tests := []struct {
 		name string
 		code string
 		want int
 	}{
-		{
-			name: "plain go statement",
-			code: `package main
+		{name: "plain go statement", code: `package main
 func bad() {
     go func() {}()
-}`,
-			want: 1,
-		},
-		{
-			name: "with errgroup import",
-			code: `package main
+}`, want: 1},
+		{name: "with errgroup import", code: `package main
 import "golang.org/x/sync/errgroup"
 func good() {
     var g errgroup.Group
     g.Go(func() error { return nil })
-}`,
-			want: 0,
-		},
+}`, want: 0},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			issues, err := analyzer.AnalyzeFile("test.go", []byte(tt.code))
@@ -176,43 +114,26 @@ func good() {
 }
 
 func TestResourceLeak(t *testing.T) {
-	rules := []types.Rule{{
-		ID:          "RESOURCE_LEAK",
-		Severity:    types.SeverityWarning,
-		Description: "Resource not closed",
-		Category:    "performance",
-		Suggestion:  "Use defer close",
-	}}
-
+	rules := []types.Rule{{ID: "RESOURCE_LEAK", Severity: types.SeverityWarning, Description: "Resource not closed", Category: "performance", Suggestion: "Use defer close"}}
 	analyzer := New(rules)
-
 	tests := []struct {
 		name string
 		code string
 		want int
 	}{
-		{
-			name: "sql.Open without close",
-			code: `package main
+		{name: "sql.Open without close", code: `package main
 import "database/sql"
 func bad() {
     db, _ := sql.Open("postgres", "conn")
     _ = db
-}`,
-			want: 1,
-		},
-		{
-			name: "sql.Open with defer close",
-			code: `package main
+}`, want: 1},
+		{name: "sql.Open with defer close", code: `package main
 import "database/sql"
 func good() {
     db, _ := sql.Open("postgres", "conn")
     defer db.Close()
-}`,
-			want: 0,
-		},
+}`, want: 0},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			issues, err := analyzer.AnalyzeFile("test.go", []byte(tt.code))
@@ -227,34 +148,92 @@ func good() {
 }
 
 func TestContextLeak(t *testing.T) {
-	rules := []types.Rule{{
-		ID:          "CONTEXT_LEAK",
-		Severity:    types.SeveritySevere,
-		Description: "Context used after cancel",
-		Category:    "security",
-		Suggestion:  "Use errgroup with context",
-	}}
-
+	rules := []types.Rule{{ID: "CONTEXT_LEAK", Severity: types.SeveritySevere, Description: "Context used after cancel", Category: "security", Suggestion: "Use errgroup with context"}}
 	analyzer := New(rules)
-
 	tests := []struct {
 		name string
 		code string
 		want int
 	}{
-		{
-			name: "go with context usage",
-			code: `package main
+		{name: "go with context usage", code: `package main
 import "context"
 func bad(ctx context.Context) {
     go func() {
         <-ctx.Done()
     }()
-}`,
-			want: 1,
-		},
+}`, want: 1},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			issues, err := analyzer.AnalyzeFile("test.go", []byte(tt.code))
+			if err != nil {
+				t.Fatalf("AnalyzeFile failed: %v", err)
+			}
+			if len(issues) != tt.want {
+				t.Errorf("%s: got %d issues, want %d", tt.name, len(issues), tt.want)
+			}
+		})
+	}
+}
 
+func TestJWTError(t *testing.T) {
+	rules := []types.Rule{{ID: "JWT_ERROR", Severity: types.SeveritySevere, Description: "JWT misconfiguration", Category: "security", Suggestion: "Validate JWT signatures properly"}}
+	analyzer := New(rules)
+	tests := []struct {
+		name string
+		code string
+		want int
+	}{
+		{name: "jwt.Parse with nil key function", code: `package main
+import "github.com/golang-jwt/jwt/v5"
+func bad(tokenString string) {
+    token, _ := jwt.Parse(tokenString, nil)
+    _ = token
+}`, want: 1},
+		{name: "safe jwt.Parse with key function", code: `package main
+import "github.com/golang-jwt/jwt/v5"
+func good(tokenString string) {
+    token, _ := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+        return []byte("secret"), nil
+    })
+    _ = token
+}`, want: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			issues, err := analyzer.AnalyzeFile("test.go", []byte(tt.code))
+			if err != nil {
+				t.Fatalf("AnalyzeFile failed: %v", err)
+			}
+			if len(issues) != tt.want {
+				t.Errorf("%s: got %d issues, want %d", tt.name, len(issues), tt.want)
+			}
+		})
+	}
+}
+
+func TestHardcodedSecret(t *testing.T) {
+	rules := []types.Rule{{ID: "HARDCODED_SECRET", Severity: types.SeveritySevere, Description: "Hardcoded secret detected", Category: "security", Suggestion: "Use environment variables"}}
+	analyzer := New(rules)
+	tests := []struct {
+		name string
+		code string
+		want int
+	}{
+		{name: "hardcoded GitHub token", code: `package main
+const GitHubToken = "ghp_abcdefghijklmnopqrstuvwxyz1234567890AB"`, want: 1},
+		{name: "hardcoded password variable", code: `package main
+var password = "super-secret-12345"`, want: 1},
+		{name: "hardcoded secret-named var", code: `package main
+var api_key = "sk_test_abcdefghijklmnopqrstuvwxyz1234567890AB"`, want: 1},
+		{name: "safe normal string", code: `package main
+const greeting = "hello world"`, want: 0},
+		{name: "safe config lookup", code: `package main
+import "os"
+func getToken() string {
+    return os.Getenv("API_TOKEN")
+}`, want: 0},
+	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			issues, err := analyzer.AnalyzeFile("test.go", []byte(tt.code))

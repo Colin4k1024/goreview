@@ -6,50 +6,59 @@ import (
 	"go/parser"
 	"go/token"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/Colin4k1024/goreview/cli/pkg/types"
 )
 
-// Analyzer performs static analysis on Go source code
 type Analyzer struct {
 	rules  []types.Rule
 	issues []types.Issue
 	fset   *token.FileSet
 }
 
-// containsLower checks if s contains substr (case-insensitive)
 func containsLower(s, substr string) bool {
 	return strings.Contains(strings.ToLower(s), strings.ToLower(substr))
 }
 
-// New creates a new analyzer with the given rules
 func New(rules []types.Rule) *Analyzer {
-	return &Analyzer{
-		rules:  rules,
-		issues: []types.Issue{},
-		fset:   token.NewFileSet(),
-	}
+	return &Analyzer{rules: rules, issues: []types.Issue{}, fset: token.NewFileSet()}
 }
 
-// AnalyzeFile analyzes a single Go source file
 func (a *Analyzer) AnalyzeFile(filePath string, content []byte) ([]types.Issue, error) {
 	a.issues = []types.Issue{}
 	a.fset = token.NewFileSet()
-
 	file, err := parser.ParseFile(a.fset, filePath, content, parser.ParseComments)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse file: %w", err)
 	}
-
 	for _, rule := range a.rules {
 		a.runRule(file, filePath, rule)
 	}
-
+	a.issues = deduplicateIssues(a.issues)
 	return a.issues, nil
 }
 
-// runRule applies a single rule to the file
+func deduplicateIssues(issues []types.Issue) []types.Issue {
+	seen := make(map[string]types.Issue)
+	for _, issue := range issues {
+		key := fmt.Sprintf("%s:%d:%s", issue.File, issue.Line, issue.RuleID)
+		seen[key] = issue
+	}
+	result := make([]types.Issue, 0, len(seen))
+	for _, issue := range seen {
+		result = append(result, issue)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].File != result[j].File {
+			return result[i].File < result[j].File
+		}
+		return result[i].Line < result[j].Line
+	})
+	return result
+}
+
 func (a *Analyzer) runRule(file *ast.File, filePath string, rule types.Rule) {
 	switch rule.ID {
 	case "SQL_INJECTION":
@@ -62,17 +71,17 @@ func (a *Analyzer) runRule(file *ast.File, filePath string, rule types.Rule) {
 		a.checkResourceLeak(file, filePath, rule)
 	case "CONTEXT_LEAK":
 		a.checkContextLeak(file, filePath, rule)
+	case "JWT_ERROR":
+		a.checkJWTError(file, filePath, rule)
+	case "HARDCODED_SECRET":
+		a.checkHardcodedSecret(file, filePath, rule)
 	case "ERROR_SWALLOW":
 		a.checkErrorSwallow(file, filePath, rule)
 	}
 }
 
-// checkSQLInjection detects potential SQL injection vulnerabilities
 func (a *Analyzer) checkSQLInjection(file *ast.File, filePath string, rule types.Rule) {
-	sqlKeywords := regexp.MustCompile(`(?i)\b(SELECT|INSERT|UPDATE|DELETE|FROM|WHERE|INTO|VALUES|SET)\b`)
 	sqlMethods := map[string]bool{"query": true, "queryrow": true, "exec": true, "prepare": true}
-	stringConcatFuncs := map[string]bool{"Sprintf": true, "Sprint": true, "Sprintln": true, "Join": true, "Errorf": true, "Append": true}
-
 	ast.Inspect(file, func(n ast.Node) bool {
 		if call, ok := n.(*ast.CallExpr); ok {
 			isSQLContext := false
@@ -81,50 +90,16 @@ func (a *Analyzer) checkSQLInjection(file *ast.File, filePath string, rule types
 					isSQLContext = true
 				}
 			}
-
-		if isSQLContext && len(call.Args) > 0 {
-			hasConcat := false
-			for _, arg := range call.Args {
-				// Check if arg itself is a BinaryExpr (string concat)
-				if binOp, ok := arg.(*ast.BinaryExpr); ok && binOp.Op == token.ADD {
-					hasConcat = true
-					break
-				}
-			}
-			if hasConcat {
-				pos := a.fset.Position(call.Pos())
-				a.issues = append(a.issues, types.Issue{
-					ID:         rule.ID,
-					Severity:   rule.Severity,
-					Title:      "Potential SQL Injection",
-					Message:    "Possible SQL injection: string concatenation used in SQL query. Use parameterized queries instead.",
-					File:       filePath,
-					Line:       pos.Line,
-					RuleID:     rule.ID,
-					Suggestion: "Use parameterized queries: db.Query(\"SELECT * FROM users WHERE id = $1\", userID)",
-					Source:     "static",
-				})
-			}
-		}
-	}
-
-		if binOp, ok := n.(*ast.BinaryExpr); ok {
-			if binOp.Op == token.ADD {
-				args := collectBinaryStringParts(binOp)
-				for _, arg := range args {
-					lower := strings.ToLower(arg)
-					if sqlKeywords.MatchString(arg) && (stringConcatFuncs[lower] || lower == "sql" || lower == "query") {
-						pos := a.fset.Position(binOp.Pos())
+			if isSQLContext && len(call.Args) > 0 {
+				for _, arg := range call.Args {
+					if binOp, ok := arg.(*ast.BinaryExpr); ok && binOp.Op == token.ADD {
+						pos := a.fset.Position(call.Pos())
 						a.issues = append(a.issues, types.Issue{
-							ID:         rule.ID,
-							Severity:   rule.Severity,
-							Title:      "Potential SQL Injection",
-							Message:    "String concatenation detected in SQL context. Use parameterized queries.",
-							File:       filePath,
-							Line:       pos.Line,
-							RuleID:     rule.ID,
-							Suggestion: "Use db.Query(\"SELECT * FROM users WHERE id = $1\", userID) instead.",
-							Source:     "static",
+							ID: rule.ID, Severity: rule.Severity, Title: "Potential SQL Injection",
+							Message: "String concatenation used in SQL query. Use parameterized queries instead.",
+							File: filePath, Line: pos.Line, RuleID: rule.ID,
+							Suggestion: "Use parameterized queries: db.Query(\"SELECT * FROM users WHERE id = $1\", userID)",
+							Source: "static",
 						})
 						break
 					}
@@ -135,57 +110,11 @@ func (a *Analyzer) checkSQLInjection(file *ast.File, filePath string, rule types
 	})
 }
 
-func argContainsConcat(n ast.Node, pattern *regexp.Regexp) bool {
-	found := false
-	ast.Inspect(n, func(node ast.Node) bool {
-		if call, ok := node.(*ast.CallExpr); ok {
-			if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
-				if pattern.MatchString(sel.Sel.Name) {
-					found = true
-					return false
-				}
-			}
-			if ident, ok := call.Fun.(*ast.Ident); ok {
-				if pattern.MatchString(ident.Name) {
-					found = true
-					return false
-				}
-			}
-		}
-		return true
-	})
-	return found
-}
-
-func collectBinaryStringParts(expr *ast.BinaryExpr) []string {
-	var parts []string
-	collectStringParts(expr, &parts)
-	return parts
-}
-
-func collectStringParts(expr ast.Expr, parts *[]string) {
-	switch e := expr.(type) {
-	case *ast.BinaryExpr:
-		if e.Op == token.ADD {
-			collectStringParts(e.X, parts)
-			collectStringParts(e.Y, parts)
-		}
-	case *ast.CallExpr:
-		if ident, ok := e.Fun.(*ast.Ident); ok {
-			*parts = append(*parts, ident.Name)
-		}
-	case *ast.Ident:
-		*parts = append(*parts, e.Name)
-	}
-}
-
-// checkSensitiveLog detects sensitive data being logged
 func (a *Analyzer) checkSensitiveLog(file *ast.File, filePath string, rule types.Rule) {
 	sensitivePatterns := []*regexp.Regexp{
-		regexp.MustCompile(`(?i)(password|passwd|pwd|secret|token|api_key|apikey|auth|bearer|credential)`),
-		regexp.MustCompile(`(?i)(email|phone|ssn|credit|card)`),
+		regexp.MustCompile(`(?i)\b(password|passwd|pwd|secret|token|api_key|apikey|auth|bearer|credential)\b`),
+		regexp.MustCompile(`(?i)\b(email|phone|ssn|credit|card|social.?security)\b`),
 	}
-
 	ast.Inspect(file, func(n ast.Node) bool {
 		if call, ok := n.(*ast.CallExpr); ok {
 			var fnName string
@@ -194,23 +123,19 @@ func (a *Analyzer) checkSensitiveLog(file *ast.File, filePath string, rule types
 			} else if ident, ok := call.Fun.(*ast.Ident); ok {
 				fnName = ident.Name
 			}
-
-			if strings.Contains(fnName, "Print") || strings.Contains(fnName, "Log") || strings.Contains(fnName, "Debug") || strings.Contains(fnName, "Error") {
+			if strings.Contains(fnName, "Print") || strings.Contains(fnName, "Log") ||
+				strings.Contains(fnName, "Debug") || strings.Contains(fnName, "Error") {
 				for _, arg := range call.Args {
 					if lit, ok := arg.(*ast.BasicLit); ok && lit.Kind == token.STRING {
 						for _, pattern := range sensitivePatterns {
 							if pattern.MatchString(lit.Value) {
 								pos := a.fset.Position(call.Pos())
 								a.issues = append(a.issues, types.Issue{
-									ID:         rule.ID,
-									Severity:   rule.Severity,
-									Title:      "Sensitive Data Logging",
-									Message:    fmt.Sprintf("Possible sensitive data '%s' logged in error/message. Avoid logging PII, tokens, passwords.", pattern.FindString(lit.Value)),
-									File:       filePath,
-									Line:       pos.Line,
-									RuleID:     rule.ID,
+									ID: rule.ID, Severity: rule.Severity, Title: "Sensitive Data Logging",
+									Message: fmt.Sprintf("Possible sensitive data '%s' logged. Avoid logging PII, tokens, passwords.", pattern.FindString(lit.Value)),
+									File: filePath, Line: pos.Line, RuleID: rule.ID,
 									Suggestion: "Remove sensitive fields from log messages. Log only user IDs or hashes.",
-									Source:     "static",
+									Source: "static",
 								})
 								break
 							}
@@ -223,9 +148,7 @@ func (a *Analyzer) checkSensitiveLog(file *ast.File, filePath string, rule types
 	})
 }
 
-// checkGoroutineLeak detects goroutines started without proper cleanup
 func (a *Analyzer) checkGoroutineLeak(file *ast.File, filePath string, rule types.Rule) {
-	// Check if file uses errgroup
 	usesErrgroup := false
 	for _, imp := range file.Imports {
 		if imp.Path.Value == `"golang.org/x/sync/errgroup"` {
@@ -234,56 +157,31 @@ func (a *Analyzer) checkGoroutineLeak(file *ast.File, filePath string, rule type
 		}
 	}
 	if usesErrgroup {
-		return // errgroup users are assumed correct
+		return
 	}
-
-	// Check for plain go statements (without errgroup)
 	ast.Inspect(file, func(n ast.Node) bool {
 		if gen, ok := n.(*ast.GoStmt); ok {
 			pos := a.fset.Position(gen.Go)
 			a.issues = append(a.issues, types.Issue{
-				ID:         rule.ID,
-				Severity:   rule.Severity,
-				Title:      "Potential Goroutine Leak",
-				Message:    "Goroutine started without errgroup. No guarantee of graceful shutdown.",
-				File:       filePath,
-				Line:       pos.Line,
-				RuleID:     rule.ID,
+				ID: rule.ID, Severity: rule.Severity, Title: "Potential Goroutine Leak",
+				Message: "Goroutine started without errgroup. No guarantee of graceful shutdown.",
+				File: filePath, Line: pos.Line, RuleID: rule.ID,
 				Suggestion: "Use golang.org/x/sync/errgroup: g, ctx := errgroup.WithContext(ctx); g.Go(func() error { ... })",
-				Source:     "static",
+				Source: "static",
 			})
 		}
 		return true
 	})
 }
 
-// checkResourceLeak detects resources that may not be properly closed
 func (a *Analyzer) checkResourceLeak(file *ast.File, filePath string, rule types.Rule) {
 	resourceTypes := []string{"DB", "Rows", "Stmt", "File", "Conn", "Client", "Redis", "Response", "Body"}
 	opened := map[string]token.Pos{}
 	closed := map[string]bool{}
 
-	// First pass: collect function signatures that have context param
-	funcsWithContext := make(map[string]bool)
-	ast.Inspect(file, func(n ast.Node) bool {
-		if fn, ok := n.(*ast.FuncDecl); ok {
-			if fn.Type.Params != nil {
-				for _, field := range fn.Type.Params.List {
-					for _, name := range field.Names {
-						if name.Name == "ctx" {
-							funcsWithContext[fn.Name.Name] = true
-						}
-					}
-				}
-			}
-		}
-		return true
-	})
-
-	// Track opened/closed resources
 	ast.Inspect(file, func(n ast.Node) bool {
 		switch node := n.(type) {
-	case *ast.AssignStmt:
+		case *ast.AssignStmt:
 			for i, lhs := range node.Lhs {
 				if i >= len(node.Rhs) {
 					continue
@@ -291,14 +189,12 @@ func (a *Analyzer) checkResourceLeak(file *ast.File, filePath string, rule types
 				if ident, ok := lhs.(*ast.Ident); ok {
 					if call, ok := node.Rhs[i].(*ast.CallExpr); ok {
 						if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
-							if base, ok := sel.X.(*ast.Ident); ok {
-								if base.Name == "sql" {
-									switch sel.Sel.Name {
-									case "Open", "Query", "QueryRow", "Prepare", "Exec":
-										for _, rt := range resourceTypes {
-											if containsLower(ident.Name, rt) {
-												opened[ident.Name] = call.Pos()
-											}
+							if base, ok := sel.X.(*ast.Ident); ok && base.Name == "sql" {
+								switch sel.Sel.Name {
+								case "Open", "Query", "QueryRow", "Prepare", "Exec":
+									for _, rt := range resourceTypes {
+										if containsLower(ident.Name, rt) {
+											opened[ident.Name] = call.Pos()
 										}
 									}
 								}
@@ -317,7 +213,6 @@ func (a *Analyzer) checkResourceLeak(file *ast.File, filePath string, rule types
 					}
 				}
 			}
-
 		case *ast.DeferStmt:
 			if call, ok := node.Call.Fun.(*ast.SelectorExpr); ok {
 				if call.Sel.Name == "Close" || call.Sel.Name == "CloseReadWriteCloser" {
@@ -334,36 +229,27 @@ func (a *Analyzer) checkResourceLeak(file *ast.File, filePath string, rule types
 		if !closed[name] {
 			pos := a.fset.Position(opened[name])
 			a.issues = append(a.issues, types.Issue{
-				ID:         rule.ID,
-				Severity:   rule.Severity,
-				Title:      "Potential Resource Leak",
-				Message:    fmt.Sprintf("Resource '%s' appears to be opened but never closed.", name),
-				File:       filePath,
-				Line:       pos.Line,
-				RuleID:     rule.ID,
+				ID: rule.ID, Severity: rule.Severity, Title: "Potential Resource Leak",
+				Message: fmt.Sprintf("Resource '%s' appears to be opened but never closed.", name),
+				File: filePath, Line: pos.Line, RuleID: rule.ID,
 				Suggestion: "Ensure defer resource.Close() is called or use a wrapper that handles close automatically.",
-				Source:     "static",
+				Source: "static",
 			})
 		}
 	}
 }
 
-// checkContextLeak detects context used after cancellation
 func (a *Analyzer) checkContextLeak(file *ast.File, filePath string, rule types.Rule) {
 	ast.Inspect(file, func(n ast.Node) bool {
 		if gen, ok := n.(*ast.GoStmt); ok {
 			pos := a.fset.Position(gen.Go)
 			if pos.Filename == filePath {
 				a.issues = append(a.issues, types.Issue{
-					ID:         rule.ID,
-					Severity:   rule.Severity,
-					Title:      "Potential Context Leak",
-					Message:    "Goroutine uses context. Verify context is not cancelled before use in goroutine.",
-					File:       filePath,
-					Line:       pos.Line,
-					RuleID:     rule.ID,
+					ID: rule.ID, Severity: rule.Severity, Title: "Potential Context Leak",
+					Message: "Goroutine uses context. Verify context is not cancelled before use in goroutine.",
+					File: filePath, Line: pos.Line, RuleID: rule.ID,
 					Suggestion: "Use golang.org/x/sync/errgroup or create a new context for the goroutine.",
-					Source:     "static",
+					Source: "static",
 				})
 			}
 		}
@@ -371,13 +257,131 @@ func (a *Analyzer) checkContextLeak(file *ast.File, filePath string, rule types.
 	})
 }
 
-// checkErrorSwallow detects errors that are silently discarded
+func (a *Analyzer) checkJWTError(file *ast.File, filePath string, rule types.Rule) {
+	jwtPackages := map[string]bool{
+		`"github.com/golang-jwt/jwt/v5"`: true,
+		`"github.com/dgrijalva/jwt-go"`:   true,
+	}
+	usesJWT := false
+	for _, imp := range file.Imports {
+		if jwtPackages[imp.Path.Value] {
+			usesJWT = true
+			break
+		}
+	}
+	if !usesJWT {
+		return
+	}
+	ast.Inspect(file, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok {
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "Parse" {
+				if len(call.Args) >= 2 && isNilExpr(call.Args[1]) {
+					pos := a.fset.Position(call.Pos())
+					a.issues = append(a.issues, types.Issue{
+						ID: rule.ID, Severity: rule.Severity, Title: "JWT Parsed Without Signature Verification",
+						Message: "jwt.Parse called with nil key function. Token signature is not verified.",
+						File: filePath, Line: pos.Line, RuleID: rule.ID,
+						Suggestion: "Always provide a key function to verify token signatures.",
+						Source: "static",
+					})
+				}
+			}
+		}
+		return true
+	})
+}
+
+func isNilExpr(n ast.Expr) bool {
+	if ident, ok := n.(*ast.Ident); ok {
+		return ident.Name == "nil"
+	}
+	return false
+}
+
+func (a *Analyzer) checkHardcodedSecret(file *ast.File, filePath string, rule types.Rule) {
+	secretStrPatterns := []*regexp.Regexp{
+		regexp.MustCompile(`(?i)["']gh[pso]_[a-zA-Z0-9]{20,}["']`),
+		regexp.MustCompile(`(?i)["']xox[baprs]-[a-zA-Z0-9-]{10,}["']`),
+		regexp.MustCompile(`(?i)["'][a-zA-Z0-9+/]{32,}={0,2}["']`),
+		regexp.MustCompile(`(?i)["'][a-fA-F0-9]{40}["']`),
+	}
+	secretNamePatterns := []*regexp.Regexp{
+		regexp.MustCompile(`(?i)^(password|passwd|pwd|secret|token|api_key|apikey|auth|bearer|credential|private_?key)$`),
+		regexp.MustCompile(`(?i)^(aws_|gcp_|azure_|stripe_|twilio_)`),
+	}
+
+	checkStr := func(lit *ast.BasicLit) bool {
+		for _, p := range secretStrPatterns {
+			if p.MatchString(lit.Value) {
+				return true
+			}
+		}
+		return false
+	}
+	checkName := func(name string) bool {
+		for _, p := range secretNamePatterns {
+			if p.MatchString(name) {
+				return true
+			}
+		}
+		return false
+	}
+
+	ast.Inspect(file, func(n ast.Node) bool {
+		switch node := n.(type) {
+		case *ast.AssignStmt:
+			for i, lhs := range node.Lhs {
+				if i >= len(node.Rhs) {
+					continue
+				}
+				rhs := node.Rhs[i]
+				if lit, ok := rhs.(*ast.BasicLit); ok && lit.Kind == token.STRING {
+					varName := ""
+					if ident, ok := lhs.(*ast.Ident); ok {
+						varName = ident.Name
+					}
+					if checkStr(lit) || checkName(varName) {
+						pos := a.fset.Position(node.Pos())
+						a.issues = append(a.issues, types.Issue{
+							ID: rule.ID, Severity: rule.Severity, Title: "Hardcoded Secret Detected",
+							Message: fmt.Sprintf("Variable '%s' may contain a hardcoded secret.", varName),
+							File: filePath, Line: pos.Line, RuleID: rule.ID,
+							Suggestion: "Use environment variables or a secrets manager (Vault, AWS Secrets Manager).",
+							Source: "static",
+						})
+					}
+				}
+			}
+		case *ast.GenDecl:
+			for _, spec := range node.Specs {
+				if vs, ok := spec.(*ast.ValueSpec); ok {
+					for i, val := range vs.Values {
+						if i >= len(vs.Names) {
+							continue
+						}
+						varName := vs.Names[i].Name
+						if lit, ok := val.(*ast.BasicLit); ok && lit.Kind == token.STRING {
+							if checkStr(lit) || checkName(varName) {
+								pos := a.fset.Position(node.Pos())
+								a.issues = append(a.issues, types.Issue{
+									ID: rule.ID, Severity: rule.Severity, Title: "Hardcoded Secret Detected",
+									Message: fmt.Sprintf("Variable '%s' may contain a hardcoded secret.", varName),
+									File: filePath, Line: pos.Line, RuleID: rule.ID,
+									Suggestion: "Use environment variables or a secrets manager (Vault, AWS Secrets Manager).",
+									Source: "static",
+								})
+							}
+						}
+					}
+				}
+			}
+		}
+		return true
+	})
+}
+
 func (a *Analyzer) checkErrorSwallow(file *ast.File, filePath string, rule types.Rule) {
-	// Skip for now - too many false positives without type-aware analysis
 	_ = file
 	_ = filePath
 	_ = rule
 }
-
-// placeholder to avoid unused imports
-var _ = regexp.MustCompile("")
