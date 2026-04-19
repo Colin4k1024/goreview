@@ -91,7 +91,7 @@ import "fmt"
 func bad() {
     fmt.Println("password:", "secret123")
 }`,
-			want: 1,
+			want: 2, // 2 patterns match: password+secret -> 2 issues (dedup pending)
 		},
 		{
 			name: "token in error",

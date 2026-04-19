@@ -18,6 +18,11 @@ type Analyzer struct {
 	fset   *token.FileSet
 }
 
+// containsLower checks if s contains substr (case-insensitive)
+func containsLower(s, substr string) bool {
+	return strings.Contains(strings.ToLower(s), strings.ToLower(substr))
+}
+
 // New creates a new analyzer with the given rules
 func New(rules []types.Rule) *Analyzer {
 	return &Analyzer{
@@ -65,49 +70,50 @@ func (a *Analyzer) runRule(file *ast.File, filePath string, rule types.Rule) {
 // checkSQLInjection detects potential SQL injection vulnerabilities
 func (a *Analyzer) checkSQLInjection(file *ast.File, filePath string, rule types.Rule) {
 	sqlKeywords := regexp.MustCompile(`(?i)\b(SELECT|INSERT|UPDATE|DELETE|FROM|WHERE|INTO|VALUES|SET)\b`)
-	sqlMethods := regexp.MustCompile(`(?i)\.(Query|QueryRow|Exec|Prepare)\s*\(`)
-	stringConcatInCall := regexp.MustCompile(`fmt\.Sprintf|strings\.Join|fmt\.Sprint|fmt\.Sprintln|fmt\.Errorf|strings\.Buffer|strconv\.|fmt\.Append`)
+	sqlMethods := map[string]bool{"query": true, "queryrow": true, "exec": true, "prepare": true}
+	stringConcatFuncs := map[string]bool{"Sprintf": true, "Sprint": true, "Sprintln": true, "Join": true, "Errorf": true, "Append": true}
 
 	ast.Inspect(file, func(n ast.Node) bool {
 		if call, ok := n.(*ast.CallExpr); ok {
 			isSQLContext := false
 			if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
-				methodName := sel.Sel.Name
-				if sqlMethods.MatchString(methodName) {
+				if sqlMethods[strings.ToLower(sel.Sel.Name)] {
 					isSQLContext = true
 				}
 			}
 
-			if isSQLContext && len(call.Args) > 0 {
-				hasConcat := false
-				for _, arg := range call.Args {
-					if argContainsConcat(arg, stringConcatInCall) {
-						hasConcat = true
-						break
-					}
-				}
-				if hasConcat {
-					pos := a.fset.Position(call.Pos())
-					a.issues = append(a.issues, types.Issue{
-						ID:         rule.ID,
-						Severity:   rule.Severity,
-						Title:      "Potential SQL Injection",
-						Message:    "Possible SQL injection: string concatenation used in SQL query. Use parameterized queries instead.",
-						File:       filePath,
-						Line:       pos.Line,
-						RuleID:     rule.ID,
-						Suggestion: "Use parameterized queries: db.Query(\"SELECT * FROM users WHERE id = $1\", userID)",
-						Source:     "static",
-					})
+		if isSQLContext && len(call.Args) > 0 {
+			hasConcat := false
+			for _, arg := range call.Args {
+				// Check if arg itself is a BinaryExpr (string concat)
+				if binOp, ok := arg.(*ast.BinaryExpr); ok && binOp.Op == token.ADD {
+					hasConcat = true
+					break
 				}
 			}
+			if hasConcat {
+				pos := a.fset.Position(call.Pos())
+				a.issues = append(a.issues, types.Issue{
+					ID:         rule.ID,
+					Severity:   rule.Severity,
+					Title:      "Potential SQL Injection",
+					Message:    "Possible SQL injection: string concatenation used in SQL query. Use parameterized queries instead.",
+					File:       filePath,
+					Line:       pos.Line,
+					RuleID:     rule.ID,
+					Suggestion: "Use parameterized queries: db.Query(\"SELECT * FROM users WHERE id = $1\", userID)",
+					Source:     "static",
+				})
+			}
 		}
+	}
 
 		if binOp, ok := n.(*ast.BinaryExpr); ok {
 			if binOp.Op == token.ADD {
 				args := collectBinaryStringParts(binOp)
 				for _, arg := range args {
-					if sqlKeywords.MatchString(arg) && stringConcatInCall.MatchString(arg) {
+					lower := strings.ToLower(arg)
+					if sqlKeywords.MatchString(arg) && (stringConcatFuncs[lower] || lower == "sql" || lower == "query") {
 						pos := a.fset.Position(binOp.Pos())
 						a.issues = append(a.issues, types.Issue{
 							ID:         rule.ID,
@@ -277,7 +283,7 @@ func (a *Analyzer) checkResourceLeak(file *ast.File, filePath string, rule types
 	// Track opened/closed resources
 	ast.Inspect(file, func(n ast.Node) bool {
 		switch node := n.(type) {
-		case *ast.AssignStmt:
+	case *ast.AssignStmt:
 			for i, lhs := range node.Lhs {
 				if i >= len(node.Rhs) {
 					continue
@@ -290,7 +296,7 @@ func (a *Analyzer) checkResourceLeak(file *ast.File, filePath string, rule types
 									switch sel.Sel.Name {
 									case "Open", "Query", "QueryRow", "Prepare", "Exec":
 										for _, rt := range resourceTypes {
-											if strings.Contains(ident.Name, rt) {
+											if containsLower(ident.Name, rt) {
 												opened[ident.Name] = call.Pos()
 											}
 										}
@@ -301,7 +307,6 @@ func (a *Analyzer) checkResourceLeak(file *ast.File, filePath string, rule types
 					}
 				}
 			}
-
 		case *ast.ExprStmt:
 			if call, ok := node.X.(*ast.CallExpr); ok {
 				if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
