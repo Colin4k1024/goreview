@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GoReview — AI-Powered Go Security & Performance Review</title>
+    <meta name="description" content="专为 Go 项目打造的安全 + 性能 AI 审核工具。检测 Context 泄漏、Goroutine 泄漏、SQL 注入等通用工具扫不出的问题。">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        :root {
+            --bg: #0a0a0f;
+            --surface: #111118;
+            --border: #1e1e2e;
+            --text: #e4e4e7;
+            --muted: #71717a;
+            --accent: #22d3ee;
+            --accent-dim: rgba(34, 211, 238, 0.1);
+            --green: #4ade80;
+            --yellow: #fbbf24;
+            --red: #f87171;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+            min-height: 100vh;
+        }
+        
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 0 24px;
+        }
+        
+        /* Nav */
+        nav {
+            padding: 24px 0;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        nav .container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .logo {
+            font-size: 20px;
+            font-weight: 700;
+            color: var(--text);
+        }
+        
+        .logo span { color: var(--accent); }
+        
+        .nav-links {
+            display: flex;
+            gap: 24px;
+        }
+        
+        .nav-links a {
+            color: var(--muted);
+            text-decoration: none;
+            font-size: 14px;
+            transition: color 0.2s;
+        }
+        
+        .nav-links a:hover { color: var(--text); }
+        
+        /* Hero */
+        .hero {
+            padding: 80px 0;
+            text-align: center;
+        }
+        
+        .hero h1 {
+            font-size: 48px;
+            font-weight: 800;
+            line-height: 1.1;
+            margin-bottom: 24px;
+        }
+        
+        .hero h1 .highlight { color: var(--accent); }
+        
+        .hero p {
+            font-size: 18px;
+            color: var(--muted);
+            max-width: 560px;
+            margin: 0 auto 40px;
+        }
+        
+        .cta-group {
+            display: flex;
+            gap: 16px;
+            justify-content: center;
+            margin-bottom: 48px;
+        }
+        
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 15px;
+            font-weight: 600;
+            text-decoration: none;
+            transition: all 0.2s;
+            cursor: pointer;
+            border: none;
+        }
+        
+        .btn-primary {
+            background: var(--accent);
+            color: #0a0a0f;
+        }
+        
+        .btn-primary:hover { opacity: 0.9; }
+        
+        .btn-secondary {
+            background: var(--surface);
+            color: var(--text);
+            border: 1px solid var(--border);
+        }
+        
+        .btn-secondary:hover { border-color: var(--accent); }
+        
+        /* Terminal */
+        .terminal {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+            text-align: left;
+            margin-bottom: 64px;
+        }
+        
+        .terminal-header {
+            background: #1a1a24;
+            padding: 12px 16px;
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        
+        .dot { width: 12px; height: 12px; border-radius: 50%; }
+        .dot.red { background: #ff5f56; }
+        .dot.yellow { background: #ffbd2e; }
+        .dot.green { background: #27ca40; }
+        
+        .terminal-body {
+            padding: 24px;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            font-size: 14px;
+        }
+        
+        .terminal-body .line { margin-bottom: 8px; }
+        
+        .prompt { color: var(--accent); }
+        .comment { color: var(--muted); }
+        .ok { color: var(--green); }
+        .warn { color: var(--yellow); }
+        .error { color: var(--red); }
+        
+        /* Stats */
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 24px;
+            margin-bottom: 64px;
+        }
+        
+        .stat {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 24px;
+            text-align: center;
+        }
+        
+        .stat-value {
+            font-size: 36px;
+            font-weight: 800;
+            color: var(--accent);
+            margin-bottom: 8px;
+        }
+        
+        .stat-label {
+            font-size: 14px;
+            color: var(--muted);
+        }
+        
+        /* Problems */
+        .problems {
+            margin-bottom: 64px;
+        }
+        
+        .section-title {
+            font-size: 24px;
+            font-weight: 700;
+            margin-bottom: 32px;
+        }
+        
+        .problem-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+        }
+        
+        .problem {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px;
+        }
+        
+        .problem-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+        
+        .problem-icon {
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+        }
+        
+        .problem.severe .problem-icon { background: rgba(248, 113, 113, 0.1); }
+        .problem.medium .problem-icon { background: rgba(251, 191, 36, 0.1); }
+        
+        .problem-title {
+            font-weight: 600;
+            font-size: 15px;
+        }
+        
+        .problem.severe .problem-title { color: var(--red); }
+        .problem.medium .problem-title { color: var(--yellow); }
+        
+        .problem-desc {
+            font-size: 13px;
+            color: var(--muted);
+            margin-bottom: 12px;
+        }
+        
+        .problem-rate {
+            font-size: 12px;
+            color: var(--muted);
+            background: var(--bg);
+            padding: 4px 8px;
+            border-radius: 4px;
+            display: inline-block;
+        }
+        
+        /* Pricing */
+        .pricing {
+            margin-bottom: 64px;
+        }
+        
+        .pricing-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 24px;
+        }
+        
+        .price-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 32px;
+        }
+        
+        .price-card.popular {
+            border-color: var(--accent);
+            position: relative;
+        }
+        
+        .price-card.popular::before {
+            content: 'Most Popular';
+            position: absolute;
+            top: -10px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: var(--accent);
+            color: #0a0a0f;
+            font-size: 11px;
+            font-weight: 700;
+            padding: 2px 12px;
+            border-radius: 4px;
+        }
+        
+        .price-name {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: var(--muted);
+        }
+        
+        .price-card.popular .price-name { color: var(--accent); }
+        
+        .price {
+            font-size: 40px;
+            font-weight: 800;
+            margin-bottom: 24px;
+        }
+        
+        .price span {
+            font-size: 16px;
+            font-weight: 400;
+            color: var(--muted);
+        }
+        
+        .price-features {
+            list-style: none;
+            margin-bottom: 24px;
+        }
+        
+        .price-features li {
+            padding: 8px 0;
+            font-size: 14px;
+            color: var(--muted);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .price-features li::before {
+            content: '✓';
+            color: var(--green);
+            font-weight: 700;
+        }
+        
+        /* Newsletter */
+        .newsletter {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 48px;
+            text-align: center;
+            margin-bottom: 64px;
+        }
+        
+        .newsletter h3 {
+            font-size: 24px;
+            margin-bottom: 12px;
+        }
+        
+        .newsletter p {
+            color: var(--muted);
+            margin-bottom: 32px;
+            font-size: 15px;
+        }
+        
+        .newsletter-form {
+            display: flex;
+            gap: 12px;
+            max-width: 480px;
+            margin: 0 auto;
+        }
+        
+        .newsletter-form input {
+            flex: 1;
+            padding: 12px 16px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text);
+            font-size: 15px;
+            outline: none;
+        }
+        
+        .newsletter-form input:focus {
+            border-color: var(--accent);
+        }
+        
+        .newsletter-form input::placeholder {
+            color: var(--muted);
+        }
+        
+        .newsletter-form button {
+            padding: 12px 24px;
+            background: var(--accent);
+            color: #0a0a0f;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 15px;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        
+        /* Footer */
+        footer {
+            padding: 32px 0;
+            border-top: 1px solid var(--border);
+            text-align: center;
+            color: var(--muted);
+            font-size: 13px;
+        }
+        
+        footer a { color: var(--muted); text-decoration: none; }
+        footer a:hover { color: var(--text); }
+        
+        /* Responsive */
+        @media (max-width: 640px) {
+            .hero h1 { font-size: 32px; }
+            .stats { grid-template-columns: 1fr; }
+            .problem-grid { grid-template-columns: 1fr; }
+            .pricing-grid { grid-template-columns: 1fr; }
+            .newsletter-form { flex-direction: column; }
+            .cta-group { flex-direction: column; align-items: center; }
+        }
+    </style>
+</head>
+<body>
+    <nav>
+        <div class="container">
+            <div class="logo">Go<span>Review</span></div>
+            <div class="nav-links">
+                <a href="#problems">检出问题</a>
+                <a href="#pricing">定价</a>
+                <a href="#blog">博客</a>
+            </div>
+        </div>
+    </nav>
+    
+    <section class="hero">
+        <div class="container">
+            <h1>
+                你的 Go 代码，<br>
+                <span class="highlight">AI 替你看过了</span>
+            </h1>
+            <p>
+                专为 Go 项目打造的 security + performance AI 审核工具。<br>
+                Context 泄漏、Goroutine 泄漏、SQL 注入 — 通用工具扫不出的，我们来。
+            </p>
+            <div class="cta-group">
+                <a href="#" class="btn btn-primary">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    免费试用
+                </a>
+                <a href="#pricing" class="btn btn-secondary">查看定价</a>
+            </div>
+            
+            <div class="terminal">
+                <div class="terminal-header">
+                    <div class="dot red"></div>
+                    <div class="dot yellow"></div>
+                    <div class="dot green"></div>
+                </div>
+                <div class="terminal-body">
+                    <div class="line"><span class="prompt">$</span> goreview scan ./... --security</div>
+                    <div class="line"><span class="comment"># Scanning 23 Go files...</span></div>
+                    <div class="line">&nbsp;</div>
+                    <div class="line"><span class="error">✗ SEVERE</span>  Context cancelled but still used in goroutine</div>
+                    <div class="line">  &nbsp;&nbsp;→ handler.go:47:6</div>
+                    <div class="line"><span class="error">✗ SEVERE</span>  SQL injection: string concat in query</div>
+                    <div class="line">  &nbsp;&nbsp;→ db.go:112:15</div>
+                    <div class="line"><span class="warn">⚠ WARN</span>  Sensitive data in error log: token field</div>
+                    <div class="line">  &nbsp;&nbsp;→ auth.go:89:10</div>
+                    <div class="line">&nbsp;</div>
+                    <div class="line"><span class="comment">3 issues found (2 severe, 1 warning)</span></div>
+                    <div class="line"><span class="comment">Done in 4.2s</span></div>
+                </div>
+            </div>
+        </div>
+    </section>
+    
+    <section class="stats">
+        <div class="container">
+            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px;">
+                <div class="stat">
+                    <div class="stat-value">5</div>
+                    <div class="stat-label">专门针对 Go 的审核规则</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value">60%</div>
+                    <div class="stat-label">Go 项目有 Context 泄漏</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value">Free</div>
+                    <div class="stat-label">公开仓库扫描无限制</div>
+                </div>
+            </div>
+        </div>
+    </section>
+    
+    <section class="problems" id="problems">
+        <div class="container">
+            <h2 class="section-title">我们检测什么</h2>
+            <div class="problem-grid">
+                <div class="problem severe">
+                    <div class="problem-header">
+                        <div class="problem-icon">🔥</div>
+                        <div class="problem-title">Context 泄漏</div>
+                    </div>
+                    <div class="problem-desc">defer cancel 后 goroutine 继续使用已取消的 context，导致请求幽灵执行。</div>
+                    <div class="problem-rate">检出率 60%</div>
+                </div>
+                <div class="problem severe">
+                    <div class="problem-header">
+                        <div class="problem-icon">💉</div>
+                        <div class="problem-title">SQL 注入</div>
+                    </div>
+                    <div class="problem-desc">用 strings.Join 或 fmt.Sprintf 拼接 SQL，绕过 ORM 直接注入。</div>
+                    <div class="problem-rate">检出率 30%</div>
+                </div>
+                <div class="problem severe">
+                    <div class="problem-header">
+                        <div class="problem-icon">🔑</div>
+                        <div class="problem-title">JWT 验证错误</div>
+                    </div>
+                    <div class="problem-desc">验证了签名但没有验证过期时间，或者直接信任 Header 的 userID。</div>
+                    <div class="problem-rate">50% 涉认证项目有问题</div>
+                </div>
+                <div class="problem medium">
+                    <div class="problem-header">
+                        <div class="problem-icon">⚡</div>
+                        <div class="problem-title">Goroutine 泄漏</div>
+                    </div>
+                    <div class="problem-desc">启动 goroutine 但没有 stop channel，并发数无限制，无优雅退出。</div>
+                    <div class="problem-rate">检出率 40%</div>
+                </div>
+                <div class="problem medium">
+                    <div class="problem-header">
+                        <div class="problem-icon">📝</div>
+                        <div class="problem-title">敏感信息日志泄漏</div>
+                    </div>
+                    <div class="problem-desc">Error log 里记录 token、password、email 等敏感字段。</div>
+                    <div class="problem-rate">检出率 50%</div>
+                </div>
+                <div class="problem medium">
+                    <div class="problem-header">
+                        <div class="problem-icon">🏃</div>
+                        <div class="problem-title">资源未释放</div>
+                    </div>
+                    <div class="problem-desc">database/sql、io.Closer、redis 连接等没有在 defer 或 error 路径正确关闭。</div>
+                    <div class="problem-rate">常见问题</div>
+                </div>
+            </div>
+        </div>
+    </section>
+    
+    <section class="pricing" id="pricing">
+        <div class="container">
+            <h2 class="section-title">简单定价</h2>
+            <div class="pricing-grid">
+                <div class="price-card">
+                    <div class="price-name">Free</div>
+                    <div class="price">$0</div>
+                    <ul class="price-features">
+                        <li>公开仓库无限扫描</li>
+                        <li>5 条规则（security + perf）</li>
+                        <li>标准报告</li>
+                        <li>GitHub Actions 集成</li>
+                    </ul>
+                    <a href="#" class="btn btn-secondary" style="width: 100%; text-align: center;">免费开始</a>
+                </div>
+                <div class="price-card popular">
+                    <div class="price-name">Pro</div>
+                    <div class="price">$29<span>/月</span></div>
+                    <ul class="price-features">
+                        <li>私有仓库无限扫描</li>
+                        <li>全部 5+ 规则</li>
+                        <li>自定义规则</li>
+                        <li>报告导出（PDF/JSON）</li>
+                        <li>历史趋势分析</li>
+                        <li>Slack 通知</li>
+                    </ul>
+                    <a href="#" class="btn btn-primary" style="width: 100%; text-align: center;">立即升级</a>
+                </div>
+                <div class="price-card">
+                    <div class="price-name">Team</div>
+                    <div class="price">$99<span>/月</span></div>
+                    <ul class="price-features">
+                        <li>Pro 全部功能</li>
+                        <li>无限团队成员</li>
+                        <li>团队规则管理</li>
+                        <li>SSO 登录</li>
+                        <li>SLA 99.9%</li>
+                        <li>专属支持</li>
+                    </ul>
+                    <a href="#" class="btn btn-secondary" style="width: 100%; text-align: center;">联系我们</a>
+                </div>
+            </div>
+        </div>
+    </section>
+    
+    <section class="newsletter" id="blog">
+        <div class="container">
+            <h3>Go + AI 安全实战</h3>
+            <p>每周一篇 Go 项目 AI 审核实战报告。真实数据，不发水文。<br>10,000+ Go 开发者已订阅。</p>
+            <form class="newsletter-form" onsubmit="event.preventDefault(); this.innerHTML='<span style=\'color:#4ade80\'>✓ 订阅成功！</span>'">
+                <input type="email" placeholder="你的邮箱" required>
+                <button type="submit">订阅</button>
+            </form>
+        </div>
+    </section>
+    
+    <footer>
+        <div class="container">
+            <p>
+                © 2026 GoReview · <a href="#">Privacy</a> · <a href="#">Terms</a> · 
+                <a href="https://github.com" target="_blank">GitHub</a>
+            </p>
+        </div>
+    </footer>
+</body>
+</html>
