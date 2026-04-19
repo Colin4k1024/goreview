@@ -1,0 +1,56 @@
+project_name: goreview
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: goreview
+    main: ./cli
+    binary: goreview
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    goarm:
+      - 7
+    ldflags:
+      - -s -w
+      - -X github.com/Colin4k1024/goreview/cli/cmd.version={{.Version}}
+
+archives:
+  - id: default
+    format: tar.gz
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - README.md
+      - LICENSE
+      - .goreview.yaml
+
+checksum:
+  name_template: 'checksums.txt'
+
+snapshot:
+  name_template: "{{ .Tag }}-next"
+
+release:
+  github:
+    owner: Colin4k1024
+    name: goreview
+  draft: false
+  prerelease: auto
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
